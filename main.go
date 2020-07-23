@@ -13,8 +13,7 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
-
-	"okcupid.com/backend/lib/logging"
+	"github.com/limitz404/lokalise-listener/logging"
 )
 
 var (
