@@ -1,3 +1,4 @@
+// Package logging provides a utility to write uniformly formatted logs.
 // Output structure:
 // Each line of output is a json object starting with '{' and ending with '}'
 // Each line object has string values with the following structure:
@@ -34,34 +35,43 @@ import (
 	"time"
 )
 
+// Args contains all key-value pairs that should be displayed
+// along with a log statement.
 type Args map[string]string
 
+// Logger contains the log level associated with a log.
 type Logger struct {
 	Level   string
 	IsFatal bool
 }
 
-func (self *Logger) Log(msg string) {
-	self.logGenericArgs(msg, nil, nil, 1)
+// Log writes a log line to stdout.
+func (logger *Logger) Log(msg string) {
+	logger.logGenericArgs(msg, nil, nil, 1)
 }
 
-func (self *Logger) LogArgs(msgTemplate string, args Args) {
-	self.logGenericArgs(msgTemplate, nil, args, 1)
+// LogArgs writes a log line containing a JSON representation of
+// the key-value pairs supplied in args to stdout.
+func (logger *Logger) LogArgs(msgTemplate string, args Args) {
+	logger.logGenericArgs(msgTemplate, nil, args, 1)
 }
 
-func (self *Logger) LogErr(msg string, err error) {
-	self.logGenericArgs(msg, err, nil, 1)
+// LogErr writes a log line containing an error to stdout.
+func (logger *Logger) LogErr(msg string, err error) {
+	logger.logGenericArgs(msg, err, nil, 1)
 }
 
-func (self *Logger) LogErrArgs(msgTemplate string, err error, args Args) {
-	self.logGenericArgs(msgTemplate, err, args, 1)
+// LogErrArgs writes a log line containing an error and a JSON representation
+// of the key-value pairs supplied in args to stdout.
+func (logger *Logger) LogErrArgs(msgTemplate string, err error, args Args) {
+	logger.logGenericArgs(msgTemplate, err, args, 1)
 }
 
 // If args is nil, then msgTemplate is not really a template; it's just the msg.
 // stackDepth is the distance from the callee's stack frame to the stack frame
 // of the user code that called into our humble logger
-func (self *Logger) logGenericArgs(msgTemplate string, err error, args Args, stackDepth int) {
-	file, func_, line := GetStackInfo(stackDepth + 1)
+func (logger *Logger) logGenericArgs(msgTemplate string, err error, args Args, stackDepth int) {
+	file, function, line := GetStackInfo(stackDepth + 1)
 	msg := msgTemplate
 	if args != nil {
 		t, templateErr := template.New("").Parse(msgTemplate)
@@ -88,11 +98,11 @@ func (self *Logger) logGenericArgs(msgTemplate string, err error, args Args, sta
 		"msgTemplate": msgTemplate,
 		"msg":         msg,
 		"time":        time.Now().Format(time.RFC3339Nano),
-		"level":       self.Level,
+		"level":       logger.Level,
 		"file":        file,
-		"func":        func_,
+		"func":        function,
 		"line":        line,
-		"process":     selfExeName,
+		"process":     loggerExeName,
 	}
 
 	for k, v := range args {
@@ -105,25 +115,27 @@ func (self *Logger) logGenericArgs(msgTemplate string, err error, args Args, sta
 
 	jsonWriter.Encode(fullArgs)
 
-	if self.IsFatal {
+	if logger.IsFatal {
 		panic(msg)
 	}
 }
 
+// GetStackInfo returns the file, function, and line of the stack frame
+// specified by stackDepth.
 func GetStackInfo(stackDepth int) (string, string, string) {
-	result_file := "?"
-	result_func := "?()"
-	result_line := "0"
+	resultFile := "?"
+	resultFunc := "?()"
+	resultLine := "0"
 
 	if pc, file, line, ok := runtime.Caller(stackDepth + 1); ok {
-		result_file = filepath.Base(file)
-		result_line = Int(line)
+		resultFile = filepath.Base(file)
+		resultLine = Int(line)
 		if fn := runtime.FuncForPC(pc); fn != nil {
 			dotName := filepath.Ext(fn.Name())
-			result_func = strings.TrimLeft(dotName, ".") + "()"
+			resultFunc = strings.TrimLeft(dotName, ".") + "()"
 		}
 	}
-	return result_file, result_func, result_line
+	return resultFile, resultFunc, resultLine
 }
 
 var (
@@ -136,7 +148,7 @@ var (
 	errorLogger *Logger
 	fatalLogger *Logger
 
-	selfExeName string
+	loggerExeName string
 )
 
 func init() {
@@ -153,41 +165,47 @@ func init() {
 	errorLogger = &Logger{Level: "error", IsFatal: false}
 	fatalLogger = &Logger{Level: "fatal", IsFatal: true}
 
-	selfExeName = filepath.Base(os.Args[0])
+	loggerExeName = filepath.Base(os.Args[0])
 }
 
+// Trace returns a trace-level logger.
 func Trace() *Logger {
 	return traceLogger
 }
 
+// Debug returns a debug-level logger.
 func Debug() *Logger {
 	return debugLogger
 }
 
+// Info returns an info-level logger.
 func Info() *Logger {
 	return infoLogger
 }
 
+// Warn returns a warn-level logger.
 func Warn() *Logger {
 	return warnLogger
 }
 
+// Error returns an error-level logger.
 func Error() *Logger {
 	return errorLogger
 }
 
+// Fatal return a fatal-level logger.
 func Fatal() *Logger {
 	return fatalLogger
 }
 
 // convenience functions for converting things to string
 
-// Converts a valid value to a JSON string. Channels, complex numbers, and
+// JSON converts a valid value to a JSON string. Channels, complex numbers, and
 // functions are not supported types. Floats are fine except for +Inf, -Inf,
 // and NaN. Maps work if the key is a string or integer. Cyclic structures are
 // right out. Pretty much everything else is fair game.
 // Read more: https://golang.org/pkg/encoding/json/#Marshal
-func Json(j interface{}) string {
+func JSON(j interface{}) string {
 	var buf bytes.Buffer
 	encoder := json.NewEncoder(&buf)
 	encoder.SetEscapeHTML(false)
@@ -203,35 +221,53 @@ func Json(j interface{}) string {
 	Error().logGenericArgs("error serializing value to json", err, nil, 1)
 	return fmt.Sprintf("<error: %v>", err)
 }
+
+// Int converts an int to a base 10 string.
 func Int(i int) string {
 	// The "a" is short for "string", obviously.
 	return strconv.Itoa(i)
 }
+
+// Int64 converts an int64 to a base 10 string.
 func Int64(i int64) string {
 	// Base 10
 	return strconv.FormatInt(i, 10)
 }
+
+// Int32 converts an int32 to a base 10 string.
 func Int32(i int32) string {
 	// Base 10
 	return strconv.FormatInt(int64(i), 10)
 }
+
+// Uint32 converts a uint32 to a base 10 string.
 func Uint32(i uint32) string {
 	// Base 10
 	return strconv.FormatUint(uint64(i), 10)
 }
+
+// Uint64 converts a uint64 to a base 10 string.
 func Uint64(i uint64) string {
 	// Base 10
 	return strconv.FormatUint(i, 10)
 }
+
+// Float64 converts a float64 to a base 10 string.
 func Float64(i float64) string {
 	return strconv.FormatFloat(i, 'f', -1, 64)
 }
+
+// Bool converts a bool to a string.
 func Bool(b bool) string {
 	return strconv.FormatBool(b)
 }
+
+// Duration converts a time.Duration to a string.
 func Duration(d time.Duration) string {
 	return d.String()
 }
+
+// Time converts a time.Time to a string.
 func Time(t time.Time) string {
 	return t.Local().Format(time.RFC3339Nano)
 }

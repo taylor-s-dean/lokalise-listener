@@ -234,6 +234,8 @@ func exportStrings(projectID string) {
 	request.Header.Set("content-type", "application/json")
 	request.Header.Set("x-api-token", readOnlyAPIToken)
 
+	logOutgoingRequest(request)
+
 	client := &http.Client{}
 	response, err := client.Do(request)
 	if err != nil {
