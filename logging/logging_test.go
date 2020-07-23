@@ -1,9 +1,10 @@
 package logging
 
 import (
-	"github.com/stretchr/testify/assert"
 	"math"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 type exampleStruct struct {
