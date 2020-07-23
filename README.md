@@ -1,6 +1,9 @@
 # lokalise-listener
 This is a web server that listens to incoming webhooks from Lokalise and creates pull requests.
 
+## Status
+![Go](https://github.com/limitz404/lokalise-listener/workflows/Go/badge.svg)
+
 ## Installation Instructions
 Clone git repository:
 ```sh
