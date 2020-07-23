@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io/ioutil"
 	"net/http"
 	"net/http/httputil"
@@ -24,8 +25,9 @@ var (
 )
 
 const (
-	httpAddress = ":https"
-	projectsURL = "https://api.lokalise.com/api2/projects"
+	httpAddress                    = ":https"
+	projectsURL                    = "https://api.lokalise.com/api2/projects"
+	lokaliseWebhookSecretHeaderKey = "x-secret"
 )
 
 func main() {
@@ -132,6 +134,27 @@ func logOutgoingRequest(request *http.Request) {
 	logRequest(request, requestDump)
 }
 
+func validateLokaliseWebhookSecret(request *http.Request, secret string) error {
+	value := request.Header.Get(lokaliseWebhookSecretHeaderKey)
+	if value != secret {
+		return errors.New("unable to validate request")
+	}
+
+	return nil
+}
+
+func respondWithError(w http.ResponseWriter, code int, message string) {
+	respondWithJSON(w, code, map[string]string{"error": message})
+}
+
+func respondWithJSON(w http.ResponseWriter, code int, payload interface{}) {
+	response, _ := json.Marshal(payload)
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	w.Write(response)
+}
+
 func test(writer http.ResponseWriter, request *http.Request) {
 	writer.Write([]byte(`
 		<html>
@@ -146,6 +169,12 @@ func test(writer http.ResponseWriter, request *http.Request) {
 }
 
 func taskComplete(writer http.ResponseWriter, request *http.Request) {
+	if err := validateLokaliseWebhookSecret(request, lokaliseWebhookSecret); err != nil {
+		respondWithError(writer, http.StatusForbidden, err.Error())
+		logging.Error().LogErr("unable to validate webhook secret", err)
+		return
+	}
+
 	jsonBody := struct {
 		Project struct {
 			ID string
