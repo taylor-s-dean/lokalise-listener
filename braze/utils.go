@@ -1,8 +1,7 @@
-package main
+package braze
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -13,6 +12,7 @@ import (
 	"time"
 
 	"github.com/limitz404/lokalise-listener/logging"
+	"github.com/limitz404/lokalise-listener/utils"
 )
 
 const (
@@ -27,20 +27,6 @@ var (
 	brazeStringRegexp = regexp.MustCompile(brazeStringRegexpStr)
 )
 
-func getBrazeStringsHandler(writer http.ResponseWriter, request *http.Request) {
-	data := map[string]interface{}{
-		"test_key": "test value",
-	}
-
-	dataBytes, err := json.Marshal(data)
-	if err != nil {
-		writer.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
-	writer.Write(dataBytes)
-}
-
 func extractBrazeStrings(template string) {
 	strings := brazeStringRegexp.FindAllStringSubmatch(template, -1)
 	logging.Debug().Log(fmt.Sprint(strings))
@@ -48,7 +34,6 @@ func extractBrazeStrings(template string) {
 
 func getBrazeTemplateInfo(templateID string) (map[string]interface{}, error) {
 	if len(templateID) == 0 {
-		logging.Error().Log("received empty templateID")
 		return nil, errors.New("received empty templateID")
 	}
 
@@ -71,25 +56,22 @@ func getBrazeTemplateInfo(templateID string) (map[string]interface{}, error) {
 	)
 
 	if err != nil {
-		logging.Error().LogErr("unable to create http request", err)
 		return nil, err
 	}
 
 	request.Header.Add("Authorization", "Bearer "+brazeTemplateAPIKey)
 
-	logOutgoingRequest(request)
+	utils.LogOutgoingRequest(request)
 
 	client := &http.Client{}
 	response, err := client.Do(request)
 	if err != nil {
-		logging.Error().LogErr("error reading response", err)
 		return nil, err
 	}
-	logResponse(response)
+	utils.LogResponse(response)
 
-	bodyJSON, err := getJSONBody(&response.Body)
+	bodyJSON, err := utils.GetJSONBody(&response.Body)
 	if err != nil {
-		logging.Error().LogErr("unable to parse JSON body", err)
 		return nil, err
 	}
 	templateBody := bodyJSON["body"].(string)
