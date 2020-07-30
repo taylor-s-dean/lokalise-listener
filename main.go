@@ -5,7 +5,10 @@ import (
 	"os"
 
 	"github.com/gorilla/mux"
+	"github.com/limitz404/lokalise-listener/braze"
 	"github.com/limitz404/lokalise-listener/logging"
+	"github.com/limitz404/lokalise-listener/lokalise"
+	"github.com/limitz404/lokalise-listener/utils"
 )
 
 const (
@@ -21,12 +24,12 @@ func main() {
 	router := mux.NewRouter()
 
 	api := router.PathPrefix("/api/v1").Subrouter()
-	api.HandleFunc("/taskComplete", wrapHandler(taskCompletedHandler)).Methods(http.MethodPost)
-	api.HandleFunc("/braze/parse_template", wrapHandler(brazeParseTemplateHandler)).Methods(http.MethodPost)
-	api.HandleFunc("/strings/braze", wrapHandler(getBrazeStringsHandler)).Methods(http.MethodGet)
+	api.HandleFunc("/taskComplete", utils.WrapHandler(lokalise.TaskCompletedHandler)).Methods(http.MethodPost)
+	api.HandleFunc("/braze/parse_template", utils.WrapHandler(braze.ParseTemplateHandler)).Methods(http.MethodPost)
+	api.HandleFunc("/strings/braze", utils.WrapHandler(braze.GetStringsHandler)).Methods(http.MethodGet)
 
 	static := router.PathPrefix("/").Subrouter()
-	static.HandleFunc("/braze/template_upload", wrapHandler(brazeTemplateUploadHandler)).Methods(http.MethodGet)
+	static.HandleFunc("/braze/template_upload", utils.WrapHandler(braze.TemplateUploadHandler)).Methods(http.MethodGet)
 
 	logging.Info().LogArgs("listening for http/https: {{.address}}", logging.Args{"address": httpAddress})
 	if err := http.ListenAndServeTLS(":https", certificatePath, keyPath, router); err != nil {

@@ -1,4 +1,4 @@
-package main
+package lokalise
 
 import (
 	"bytes"
@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/limitz404/lokalise-listener/logging"
+	"github.com/limitz404/lokalise-listener/utils"
 )
 
 const (
@@ -70,7 +71,7 @@ func createStringsPullRequest(projectID string) {
 	request.Header.Set("content-type", "application/json")
 	request.Header.Set("x-api-token", readOnlyAPIToken)
 
-	logOutgoingRequest(request)
+	utils.LogOutgoingRequest(request)
 
 	client := &http.Client{}
 	response, err := client.Do(request)
@@ -78,5 +79,5 @@ func createStringsPullRequest(projectID string) {
 		logging.Error().LogErr("error reading response", err)
 		return
 	}
-	logResponse(response)
+	utils.LogResponse(response)
 }

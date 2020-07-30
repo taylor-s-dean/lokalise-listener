@@ -1,9 +1,8 @@
-package main
+package utils
 
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"io"
 	"io/ioutil"
 	"net/http"
@@ -13,9 +12,12 @@ import (
 	"github.com/limitz404/lokalise-listener/logging"
 )
 
-type requestHandler func(writer http.ResponseWriter, request *http.Request)
+// RequestHandler is a function that handles an HTTP request.
+type RequestHandler func(writer http.ResponseWriter, request *http.Request)
 
-func wrapHandler(handler requestHandler) requestHandler {
+// WrapHandler wraps an HTTP request handler by logging the request then
+// calling the handler.
+func WrapHandler(handler RequestHandler) RequestHandler {
 	return func(writer http.ResponseWriter, request *http.Request) {
 		logIncomingRequest(request)
 		handler(writer, request)
@@ -34,7 +36,8 @@ func prettyJSON(bodyJSON map[string]interface{}) ([]byte, error) {
 	return json.MarshalIndent(bodyJSON, "", "    ")
 }
 
-func logResponse(response *http.Response) {
+// LogResponse formats an HTTP reponse and prints it.
+func LogResponse(response *http.Response) {
 	if response == nil {
 		return
 	}
@@ -75,7 +78,7 @@ func logResponse(response *http.Response) {
 
 func getBodyBytes(body *io.ReadCloser) ([]byte, error) {
 	if body == nil || *body == nil {
-		return nil, errors.New("body is nil")
+		return []byte{}, nil
 	}
 
 	bodyDump, err := ioutil.ReadAll(*body)
@@ -91,9 +94,11 @@ func getBodyBytes(body *io.ReadCloser) ([]byte, error) {
 	return bodyDump, nil
 }
 
-func getJSONBody(body *io.ReadCloser) (map[string]interface{}, error) {
+// GetJSONBody unmarshals a JSON formatted HTTP body without
+// destroying the body itself.
+func GetJSONBody(body *io.ReadCloser) (map[string]interface{}, error) {
 	if body == nil {
-		return nil, errors.New("body is nil")
+		return map[string]interface{}{}, nil
 	}
 
 	bodyDump, err := getBodyBytes(body)
@@ -109,83 +114,92 @@ func getJSONBody(body *io.ReadCloser) (map[string]interface{}, error) {
 	return bodyJSON, nil
 }
 
-func dumpBody(body *io.ReadCloser, contentType string) []byte {
+func dumpBody(body *io.ReadCloser, contentType string) ([]byte, error) {
 	if body == nil {
-		return []byte{}
+		return []byte{}, nil
 	}
 
 	if strings.Contains(contentType, "application/json") {
-		bodyJSON, err := getJSONBody(body)
+		bodyJSON, err := GetJSONBody(body)
 		if err != nil {
-			logging.Error().LogErr("unable to get JSON body", err)
-			return []byte{}
+			return nil, err
 		}
 
 		bodyDump, err := json.MarshalIndent(bodyJSON, "", "    ")
 		if err != nil {
-			logging.Error().LogErr("failed to marshal JSON", err)
-			return []byte{}
+			return nil, err
 		}
 
-		return bodyDump
+		return bodyDump, nil
 	}
 
 	bodyDump, err := getBodyBytes(body)
 	if err != nil {
-		logging.Error().LogErr("unable to dump body", err)
-		return []byte{}
+		return nil, err
 	}
 
-	return bodyDump
+	return bodyDump, nil
 }
 
-func logRequest(request *http.Request, requestDump []byte) {
+func logRequest(request *http.Request, requestDump []byte) error {
 	if request == nil {
-		return
+		return nil
 	}
 
 	logBuilder := strings.Builder{}
 	logBuilder.WriteRune('\n')
 	logBuilder.Write(requestDump)
+
+	body, err := dumpBody(&request.Body, request.Header.Get("Content-Type"))
+	if err != nil {
+		return err
+	}
+
 	logBuilder.WriteRune('\n')
-	logBuilder.Write(dumpBody(&request.Body, request.Header.Get("Content-Type")))
+	logBuilder.Write(body)
 	logging.Debug().Log(logBuilder.String())
+
+	return nil
 }
 
-func logIncomingRequest(request *http.Request) {
+func logIncomingRequest(request *http.Request) error {
 	if request == nil {
-		return
+		return nil
 	}
 
 	requestDump, err := httputil.DumpRequest(request, false)
 	if err != nil {
-		logging.Error().LogErr("unable to dump http request", err)
-		return
+		return err
 	}
 	logRequest(request, requestDump)
+
+	return err
 }
 
-func logOutgoingRequest(request *http.Request) {
+// LogOutgoingRequest formats and logs an outbound HTTP request.
+func LogOutgoingRequest(request *http.Request) error {
 	if request == nil {
-		return
+		return nil
 	}
 
 	requestDump, err := httputil.DumpRequestOut(request, false)
 	if err != nil {
-		logging.Error().LogErr("unable to dump http request", err)
-		return
+		return err
 	}
 	logRequest(request, requestDump)
+
+	return nil
 }
 
-func respondWithError(w http.ResponseWriter, code int, message string) {
-	respondWithJSON(w, code, map[string]string{"error": message})
-}
-
-func respondWithJSON(w http.ResponseWriter, code int, payload interface{}) {
-	response, _ := json.Marshal(payload)
+func respondWithJSON(w http.ResponseWriter, code int, payload interface{}) error {
+	response, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	w.Write(response)
+
+	return nil
 }

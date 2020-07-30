@@ -1,14 +1,16 @@
-package main
+package braze
 
 import (
 	"encoding/json"
-	"io/ioutil"
 	"net/http"
 
 	"github.com/limitz404/lokalise-listener/logging"
 )
 
-func brazeParseTemplateHandler(writer http.ResponseWriter, request *http.Request) {
+// ParseTemplateHandler receives the form values from a HTML form and
+// parses out a Braze template ID. It then initiates the process of parsing
+// L10N strings from the template and uploading those to Lokalise.
+func ParseTemplateHandler(writer http.ResponseWriter, request *http.Request) {
 	templateID := request.PostFormValue("template_id")
 	if len(templateID) == 0 {
 		logging.Error().Log("template_id is empty")
@@ -31,7 +33,25 @@ func brazeParseTemplateHandler(writer http.ResponseWriter, request *http.Request
 	writer.Write(dataBytes)
 }
 
-func brazeTemplateUploadHandler(writer http.ResponseWriter, request *http.Request) {
+// GetStringsHandler responds to a Braze connected content request to get
+// localizeable strings for a given template.
+func GetStringsHandler(writer http.ResponseWriter, request *http.Request) {
+	data := map[string]interface{}{
+		"test_key": "test value",
+	}
+
+	dataBytes, err := json.Marshal(data)
+	if err != nil {
+		writer.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	writer.Write(dataBytes)
+}
+
+// TemplateUploadHandler displays a form to submit a Braze template ID to be parsed
+// and uploaded to Lokalise.
+func TemplateUploadHandler(writer http.ResponseWriter, request *http.Request) {
 	writer.Write([]byte(`
 		<!DOCTYPE html>
 		<html lang="en">
@@ -64,35 +84,4 @@ func brazeTemplateUploadHandler(writer http.ResponseWriter, request *http.Reques
 		</body>
         </html>
 	`))
-}
-
-func taskCompletedHandler(writer http.ResponseWriter, request *http.Request) {
-	if err := validateLokaliseWebhookSecret(request, lokaliseWebhookSecret); err != nil {
-		respondWithError(writer, http.StatusForbidden, err.Error())
-		logging.Error().LogErr("unable to validate webhook secret", err)
-		return
-	}
-
-	jsonBody := struct {
-		Project struct {
-			ID string
-		}
-	}{}
-
-	body, err := ioutil.ReadAll(request.Body)
-	if err := request.Body.Close(); err != nil {
-		logging.Error().LogErr("failed to close request body", err)
-	}
-
-	if err != nil {
-		logging.Error().LogErr("failed to read request body", err)
-		return
-	}
-
-	if err := json.Unmarshal(body, &jsonBody); err != nil {
-		logging.Error().LogErr("failed to unmarshal JSON body", err)
-		return
-	}
-
-	createStringsPullRequest(jsonBody.Project.ID)
 }
