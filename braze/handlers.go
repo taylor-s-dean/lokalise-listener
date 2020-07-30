@@ -37,7 +37,7 @@ func ParseTemplateHandler(writer http.ResponseWriter, request *http.Request) {
 // localizeable strings for a given template.
 func GetStringsHandler(writer http.ResponseWriter, request *http.Request) {
 	data := map[string]interface{}{
-		"test_key": "test value",
+		"test_key": "test value {{custom_attribute.${displayname}}}",
 	}
 
 	dataBytes, err := json.Marshal(data)
