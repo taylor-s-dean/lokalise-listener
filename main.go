@@ -5,10 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"io/ioutil"
 	"net/http"
 	"net/http/httputil"
+	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -16,25 +20,38 @@ import (
 	"github.com/limitz404/lokalise-listener/logging"
 )
 
+const (
+	httpAddress = ":https"
+
+	lokaliseURL                    = "https://api.lokalise.com"
+	lokaliseProjectsAPI            = "/api2/projects"
+	lokaliseWebhookSecretHeaderKey = "x-secret"
+
+	brazeURL             = "https://rest.iad-01.braze.com"
+	brazeTemplateInfoAPI = "/templates/email/info"
+	brazeStringRegexpStr = `{{[ \t]*strings\.(?P<key>.+?)[ \t]*\|[ \t]*default:[ \t]*(?:'|\")(?P<default>.+?)(?:'|\")[ \t]*}}`
+)
+
 var (
 	certificatePath       = os.Getenv("TLS_CERTIFICATE_PATH")
 	keyPath               = os.Getenv("TLS_PRIVATE_KEY_PATH")
 	lokaliseWebhookSecret = os.Getenv("LOKALISE_WEBHOOK_SECRET")
 	readOnlyAPIToken      = os.Getenv("LOKALISE_READ_ONLY_API_TOKEN")
-)
+	brazeTemplateAPIKey   = os.Getenv("BRAZE_TEMPLATE_API_KEY")
 
-const (
-	httpAddress                    = ":https"
-	projectsURL                    = "https://api.lokalise.com/api2/projects"
-	lokaliseWebhookSecretHeaderKey = "x-secret"
+	brazeStringRegexp = regexp.MustCompile(brazeStringRegexpStr)
 )
 
 func main() {
 	router := mux.NewRouter()
+
 	api := router.PathPrefix("/api/v1").Subrouter()
-	api.HandleFunc("/taskComplete", wrapHandler(taskComplete)).Methods(http.MethodPost)
+	api.HandleFunc("/taskComplete", wrapHandler(taskCompletedHandler)).Methods(http.MethodPost)
+	api.HandleFunc("/braze/parse_template", wrapHandler(brazeParseTemplate)).Methods(http.MethodPost)
+	api.HandleFunc("/strings/braze", wrapHandler(getBrazeStrings)).Methods(http.MethodGet)
+
 	static := router.PathPrefix("/").Subrouter()
-	static.HandleFunc("/test", wrapHandler(test)).Methods(http.MethodGet)
+	static.HandleFunc("/braze/template_upload", wrapHandler(brazeTemplateUploadHandler)).Methods(http.MethodGet)
 
 	logging.Info().LogArgs("listening for http/https: {{.address}}", logging.Args{"address": httpAddress})
 	if err := http.ListenAndServeTLS(":https", certificatePath, keyPath, router); err != nil {
@@ -51,7 +68,23 @@ func wrapHandler(handler requestHandler) requestHandler {
 	}
 }
 
+func prettyJSONString(bodyJSON map[string]interface{}) string {
+	bodyBytes, err := prettyJSON(bodyJSON)
+	if err != nil {
+		return ""
+	}
+	return string(bodyBytes)
+}
+
+func prettyJSON(bodyJSON map[string]interface{}) ([]byte, error) {
+	return json.MarshalIndent(bodyJSON, "", "    ")
+}
+
 func logResponse(response *http.Response) {
+	if response == nil {
+		return
+	}
+
 	responseDump, err := httputil.DumpResponse(response, false)
 	if err != nil {
 		logging.Error().LogErr("unable to dump http request", err)
@@ -72,7 +105,7 @@ func logResponse(response *http.Response) {
 			logging.Error().LogErr("failed to unmarshal JSON", err)
 		}
 
-		bodyDump, err = json.MarshalIndent(bodyObj, "", "    ")
+		bodyDump, err = prettyJSON(bodyObj)
 		if err != nil {
 			logging.Error().LogErr("failed to marshal JSON", err)
 		}
@@ -86,36 +119,90 @@ func logResponse(response *http.Response) {
 	logging.Debug().Log(logBuilder.String())
 }
 
-func logRequest(request *http.Request, requestDump []byte) {
-	bodyDump, err := ioutil.ReadAll(request.Body)
-	if err := request.Body.Close(); err != nil {
-		logging.Error().LogErr("failed to close request body", err)
+func getBodyBytes(body *io.ReadCloser) ([]byte, error) {
+	if body == nil || *body == nil {
+		return nil, errors.New("body is nil")
 	}
-	request.Body = ioutil.NopCloser(bytes.NewBuffer(bodyDump))
 
+	bodyDump, err := ioutil.ReadAll(*body)
 	if err != nil {
-		logging.Error().LogErr("failed to read request body", err)
-	} else if len(bodyDump) > 0 && strings.Contains(request.Header.Get("Content-Type"), "application/json") {
-		bodyObj := map[string]interface{}{}
-		if err := json.Unmarshal(bodyDump, &bodyObj); err != nil {
-			logging.Error().LogErr("failed to unmarshal JSON", err)
+		return nil, err
+	}
+
+	if err := (*body).Close(); err != nil {
+		return nil, err
+	}
+	*body = ioutil.NopCloser(bytes.NewBuffer(bodyDump))
+
+	return bodyDump, nil
+}
+
+func getJSONBody(body *io.ReadCloser) (map[string]interface{}, error) {
+	if body == nil {
+		return nil, errors.New("body is nil")
+	}
+
+	bodyDump, err := getBodyBytes(body)
+	if err != nil {
+		return nil, err
+	}
+
+	bodyJSON := map[string]interface{}{}
+	if err := json.Unmarshal(bodyDump, &bodyJSON); err != nil {
+		return nil, err
+	}
+
+	return bodyJSON, nil
+}
+
+func dumpBody(body *io.ReadCloser, contentType string) []byte {
+	if body == nil {
+		return []byte{}
+	}
+
+	if strings.Contains(contentType, "application/json") {
+		bodyJSON, err := getJSONBody(body)
+		if err != nil {
+			logging.Error().LogErr("unable to get JSON body", err)
+			return []byte{}
 		}
 
-		bodyDump, err = json.MarshalIndent(bodyObj, "", "    ")
+		bodyDump, err := json.MarshalIndent(bodyJSON, "", "    ")
 		if err != nil {
 			logging.Error().LogErr("failed to marshal JSON", err)
+			return []byte{}
 		}
+
+		return bodyDump
+	}
+
+	bodyDump, err := getBodyBytes(body)
+	if err != nil {
+		logging.Error().LogErr("unable to dump body", err)
+		return []byte{}
+	}
+
+	return bodyDump
+}
+
+func logRequest(request *http.Request, requestDump []byte) {
+	if request == nil {
+		return
 	}
 
 	logBuilder := strings.Builder{}
 	logBuilder.WriteRune('\n')
 	logBuilder.Write(requestDump)
 	logBuilder.WriteRune('\n')
-	logBuilder.Write(bodyDump)
+	logBuilder.Write(dumpBody(&request.Body, request.Header.Get("Content-Type")))
 	logging.Debug().Log(logBuilder.String())
 }
 
 func logIncomingRequest(request *http.Request) {
+	if request == nil {
+		return
+	}
+
 	requestDump, err := httputil.DumpRequest(request, false)
 	if err != nil {
 		logging.Error().LogErr("unable to dump http request", err)
@@ -125,6 +212,10 @@ func logIncomingRequest(request *http.Request) {
 }
 
 func logOutgoingRequest(request *http.Request) {
+	if request == nil {
+		return
+	}
+
 	requestDump, err := httputil.DumpRequestOut(request, false)
 	if err != nil {
 		logging.Error().LogErr("unable to dump http request", err)
@@ -154,20 +245,65 @@ func respondWithJSON(w http.ResponseWriter, code int, payload interface{}) {
 	w.Write(response)
 }
 
-func test(writer http.ResponseWriter, request *http.Request) {
+func brazeParseTemplate(writer http.ResponseWriter, request *http.Request) {
+	templateID := request.PostFormValue("template_id")
+	if len(templateID) == 0 {
+		logging.Error().Log("template_id is empty")
+		return
+	}
+
+	logging.Debug().LogArgs("received parse template request", logging.Args{"template_id": templateID})
+	getBrazeTemplateInfo(templateID)
+
+	data := map[string]interface{}{
+		"template_id": templateID,
+	}
+
+	dataBytes, err := json.Marshal(data)
+	if err != nil {
+		writer.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	writer.Write(dataBytes)
+}
+
+func brazeTemplateUploadHandler(writer http.ResponseWriter, request *http.Request) {
 	writer.Write([]byte(`
-		<html>
+		<!DOCTYPE html>
+		<html lang="en">
 		<head>
-		<title>Test Successful</title>
-		<basefont size=4>
+		<meta charset="utf-8">
+        <title>Braze2Lokalise</title>
+		<script src="https://code.jquery.com/jquery-1.12.4.min.js"></script>
 		</head>
-		<h1>This is a test of a web server.</h1>
+		<body>
+			<h1>Braze2Lokalise Translation Uploader</h1>
+			<p>
+				Please enter the API Indentifier (found at the bottom of the template page on Braze) here:
+			</p>
+			<form id="upload" action="/api/v1/braze/parse_template" method="post">
+				<input type="text" name="template_id"/>
+				<input type="submit" value="Submit">
+			</form>
+			<script>
+			$("#upload").submit(function(e) {
+				e.preventDefault();
+				var template_id = $(this).find("input[name='template_id']").val()
+				$.post($(this).attr("action"), {template_id: template_id}).success(function(data) {
+					var obj = $.parseJSON(data)
+					alert(("Successfully uploaded strings from template_id: ").concat(obj.template_id));
+				}).fail(function() {
+					alert("Failed to upload strings from template");
+				});
+			});
+			</script>
 		</body>
-		</html>
+        </html>
 	`))
 }
 
-func taskComplete(writer http.ResponseWriter, request *http.Request) {
+func taskCompletedHandler(writer http.ResponseWriter, request *http.Request) {
 	if err := validateLokaliseWebhookSecret(request, lokaliseWebhookSecret); err != nil {
 		respondWithError(writer, http.StatusForbidden, err.Error())
 		logging.Error().LogErr("unable to validate webhook secret", err)
@@ -195,12 +331,66 @@ func taskComplete(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	exportStrings(jsonBody.Project.ID)
+	createStringsPullRequest(jsonBody.Project.ID)
 }
 
-func exportStrings(projectID string) {
+func getBrazeTemplateInfo(templateID string) (map[string]interface{}, error) {
+	if len(templateID) == 0 {
+		logging.Error().Log("received empty templateID")
+		return nil, errors.New("received empty templateID")
+	}
+
+	urlValues := url.Values{}
+	urlValues.Add("email_template_id", templateID)
 	urlBuilder := strings.Builder{}
-	urlBuilder.WriteString(projectsURL)
+	urlBuilder.WriteString(brazeURL)
+	urlBuilder.WriteString(brazeTemplateInfoAPI)
+	urlBuilder.WriteRune('?')
+	urlBuilder.WriteString(urlValues.Encode())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	request, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodGet,
+		urlBuilder.String(),
+		nil,
+	)
+
+	if err != nil {
+		logging.Error().LogErr("unable to create http request", err)
+		return nil, err
+	}
+
+	request.Header.Add("Authorization", "Bearer "+brazeTemplateAPIKey)
+
+	logOutgoingRequest(request)
+
+	client := &http.Client{}
+	response, err := client.Do(request)
+	if err != nil {
+		logging.Error().LogErr("error reading response", err)
+		return nil, err
+	}
+	logResponse(response)
+
+	bodyJSON, err := getJSONBody(&response.Body)
+	if err != nil {
+		logging.Error().LogErr("unable to parse JSON body", err)
+		return nil, err
+	}
+	templateBody := bodyJSON["body"].(string)
+	logging.Debug().Log(templateBody)
+	extractBrazeStrings(templateBody)
+
+	return nil, nil
+}
+
+func createStringsPullRequest(projectID string) {
+	urlBuilder := strings.Builder{}
+	urlBuilder.WriteString(lokaliseURL)
+	urlBuilder.WriteString(lokaliseProjectsAPI)
 	urlBuilder.WriteRune('/')
 	urlBuilder.WriteString(projectID)
 	urlBuilder.WriteString("/files/download")
@@ -221,7 +411,7 @@ func exportStrings(projectID string) {
 
 	request, err := http.NewRequestWithContext(
 		ctx,
-		"POST",
+		http.MethodPost,
 		urlBuilder.String(),
 		bytes.NewBuffer(dataBytes),
 	)
@@ -243,4 +433,23 @@ func exportStrings(projectID string) {
 		return
 	}
 	logResponse(response)
+}
+
+func getBrazeStrings(writer http.ResponseWriter, request *http.Request) {
+	data := map[string]interface{}{
+		"test_key": "test value",
+	}
+
+	dataBytes, err := json.Marshal(data)
+	if err != nil {
+		writer.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	writer.Write(dataBytes)
+}
+
+func extractBrazeStrings(template string) {
+	strings := brazeStringRegexp.FindAllStringSubmatch(template, -1)
+	logging.Debug().Log(fmt.Sprint(strings))
 }
