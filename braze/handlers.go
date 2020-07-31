@@ -36,17 +36,7 @@ func ParseTemplateHandler(writer http.ResponseWriter, request *http.Request) {
 // GetStringsHandler responds to a Braze connected content request to get
 // localizeable strings for a given template.
 func GetStringsHandler(writer http.ResponseWriter, request *http.Request) {
-	data := map[string]interface{}{
-		"test_key": "test value {{custom_attribute.${displayname}}}",
-	}
-
-	dataBytes, err := json.Marshal(data)
-	if err != nil {
-		writer.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
-	writer.Write(dataBytes)
+	brazeTemplateStringsCache.Fetch(writer, request)
 }
 
 // TemplateUploadHandler displays a form to submit a Braze template ID to be parsed

@@ -21,12 +21,14 @@ var (
 )
 
 func main() {
+	go braze.StartStringsCacheEvictionLoop()
+
 	router := mux.NewRouter()
 
 	api := router.PathPrefix("/api/v1").Subrouter()
 	api.HandleFunc("/taskComplete", utils.WrapHandler(lokalise.TaskCompletedHandler)).Methods(http.MethodPost)
 	api.HandleFunc("/braze/parse_template", utils.WrapHandler(braze.ParseTemplateHandler)).Methods(http.MethodPost)
-	api.HandleFunc("/strings/braze", utils.WrapHandler(braze.GetStringsHandler)).Methods(http.MethodGet)
+	api.HandleFunc("/strings/braze", utils.WrapHandler(braze.GetStringsHandler)).Methods(http.MethodPost)
 
 	static := router.PathPrefix("/").Subrouter()
 	static.HandleFunc("/braze/template_upload", utils.WrapHandler(braze.TemplateUploadHandler)).Methods(http.MethodGet)

@@ -8,7 +8,9 @@ import (
 	"io/ioutil"
 	"net/http"
 	"net/http/httputil"
+	"net/url"
 	"strings"
+	"time"
 
 	"github.com/limitz404/lokalise-listener/logging"
 )
@@ -20,10 +22,14 @@ type RequestHandler func(writer http.ResponseWriter, request *http.Request)
 // calling the handler.
 func WrapHandler(handler RequestHandler) RequestHandler {
 	return func(writer http.ResponseWriter, request *http.Request) {
+		start := time.Now()
 		if err := logIncomingRequest(request); err != nil {
 			logging.Error().LogErr("failed to log incoming request", err)
 		}
 		handler(writer, request)
+		logging.Info().LogArgs("request handled in {{.duration}}", logging.Args{
+			"duration": logging.Duration(time.Now().Sub(start)),
+		})
 	}
 }
 
@@ -230,6 +236,10 @@ func respondWithJSON(w http.ResponseWriter, code int, payload interface{}) error
 
 // WrapError adds stack information to an error so its origin can be easily deduced.
 func WrapError(err error) error {
+	if err == nil {
+		return nil
+	}
+
 	file, function, line := logging.GetStackInfo(1)
 
 	errorString := strings.Builder{}
@@ -244,4 +254,29 @@ func WrapError(err error) error {
 	errorString.WriteString(err.Error())
 
 	return errors.New(errorString.String())
+}
+
+// FlattenPostForm converts from a struct of lists to a map[string]string
+// with one value per key.
+func FlattenPostForm(form url.Values) (map[string]string, error) {
+	formBytes, err := json.Marshal(form)
+	if err != nil {
+		return nil, WrapError(err)
+	}
+
+	formMap := map[string]interface{}{}
+	if err := json.Unmarshal(formBytes, &formMap); err != nil {
+		return nil, WrapError(err)
+	}
+
+	stringMap := map[string]string{}
+	for key, value := range formMap {
+		valueSlice := value.([]interface{})
+		if len(valueSlice) != 1 {
+			return nil, WrapError(errors.New("malformed form data"))
+		}
+		stringMap[key] = valueSlice[0].(string)
+	}
+
+	return stringMap, nil
 }
