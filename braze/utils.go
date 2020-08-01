@@ -30,6 +30,7 @@ var (
 
 	brazeStringRegexp         = regexp.MustCompile(brazeStringRegexpStr)
 	brazeTemplateStringsCache = stringsCache{}
+	brazeStringStore          = stringsStore{}
 )
 
 type stringsCache struct {
@@ -39,6 +40,19 @@ type stringsCache struct {
 type stringsCacheValue struct {
 	evictionTime time.Time
 	data         []byte
+}
+
+type stringsStore struct {
+	sync.Map
+}
+
+func (cache *stringsStore) Get(key string) (map[string]string, bool) {
+	value, ok := cache.Load(key)
+	if ok {
+		return value.(map[string]string), ok
+	}
+
+	return nil, ok
 }
 
 func newStringsCacheValue(data []byte) *stringsCacheValue {
@@ -136,8 +150,8 @@ func (cache *stringsCache) Fetch(writer http.ResponseWriter, request *http.Reque
 	if ok {
 		value.Touch()
 		cache.Store(key, value)
-		logging.Debug().LogArgs("eviction time", logging.Args{"evictionTime": value.evictionTime.String()})
 		writer.Write(value.GetData())
+		writer.Header().Add("X-From-Cache", "1")
 		logging.Debug().LogArgs("cache hit", logging.Args{"key": key})
 		return
 	}
@@ -147,8 +161,10 @@ func (cache *stringsCache) Fetch(writer http.ResponseWriter, request *http.Reque
 	// Determine the language and populate the template parameters
 	// ------------------------------------------------------------------------
 	testTemplate := testTemplateEs
+	testParagraph := "La dirección de correo electrónico que utiliza para iniciar sesión en OkCupid acaba de cambiar. Si no realizó este cambio, infórmenos de inmediato."
 	if formData["locale"] == "en" {
 		testTemplate = testTemplateEn
+		testParagraph = "The email address you use to sign in to OkCupid was just changed. If you didn’t make this change, please let us know immediately."
 	}
 
 	t, err := template.New("").Parse(testTemplate)
@@ -165,7 +181,8 @@ func (cache *stringsCache) Fetch(writer http.ResponseWriter, request *http.Reque
 	// Generate the response JSON
 	// ------------------------------------------------------------------------
 	data := map[string]interface{}{
-		"hello": buf.String(),
+		"header":    buf.String(),
+		"paragraph": testParagraph,
 	}
 
 	dataBytes, err := json.Marshal(data)
@@ -260,7 +277,20 @@ func getBrazeTemplateInfo(templateID string) (map[string]interface{}, error) {
 	}
 	templateBody := bodyJSON["body"].(string)
 
-	extractBrazeStrings(templateBody)
+	extractedStrings, err := extractBrazeStrings(templateBody)
+	if err != nil {
+		return nil, utils.WrapError(err)
+	}
+
+	brazeStringStore.Store(templateID, extractedStrings)
+	brazeStringStore.Range(func(key, value interface{}) bool {
+		logging.Debug().Log(key.(string) + ": \n" + utils.PrettyJSONString(value.(map[string]string)))
+		return true
+	})
+	value, ok := brazeStringStore.Get(templateID)
+	if ok {
+		logging.Debug().Log(utils.PrettyJSONString(value))
+	}
 
 	return nil, nil
 }
