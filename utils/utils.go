@@ -18,6 +18,18 @@ import (
 // RequestHandler is a function that handles an HTTP request.
 type RequestHandler func(writer http.ResponseWriter, request *http.Request)
 
+// Neuter prevents the http.Handler from displaying the directory layout.
+func Neuter(next http.Handler) http.Handler {
+	return http.HandlerFunc(WrapHandler(func(writer http.ResponseWriter, request *http.Request) {
+		if len(request.URL.Path) == 0 || strings.HasSuffix(request.URL.Path, "/") {
+			http.NotFound(writer, request)
+			return
+		}
+
+		next.ServeHTTP(writer, request)
+	}))
+}
+
 // WrapHandler wraps an HTTP request handler by logging the request then
 // calling the handler.
 func WrapHandler(handler RequestHandler) RequestHandler {
@@ -42,7 +54,8 @@ func PrettyJSONString(stringJSON map[string]string) string {
 	return string(stringBytes)
 }
 
-func prettyJSONInterface(bodyJSON map[string]interface{}) string {
+// PrettyJSONInterface formats and prints a map as JSON.
+func PrettyJSONInterface(bodyJSON map[string]interface{}) string {
 	bodyBytes, err := prettyJSON(bodyJSON)
 	if err != nil {
 		return ""

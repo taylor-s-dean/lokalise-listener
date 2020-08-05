@@ -191,6 +191,8 @@ func (cache *stringsCache) Fetch(writer http.ResponseWriter, request *http.Reque
 		return
 	}
 
+	logging.Debug().Log("\n" + utils.PrettyJSONInterface(data))
+
 	// ------------------------------------------------------------------------
 	// Write the response
 	// ------------------------------------------------------------------------
@@ -233,7 +235,7 @@ func extractBrazeStrings(template string) (map[string]string, error) {
 	return stringMap, nil
 }
 
-func getBrazeTemplateInfo(templateID string) (map[string]interface{}, error) {
+func getBrazeTemplateInfo(templateID string) (map[string]string, error) {
 	if len(templateID) == 0 {
 		return nil, utils.WrapError(errors.New("received empty templateID"))
 	}
@@ -292,5 +294,5 @@ func getBrazeTemplateInfo(templateID string) (map[string]interface{}, error) {
 		logging.Debug().Log(utils.PrettyJSONString(value))
 	}
 
-	return nil, nil
+	return extractedStrings, nil
 }

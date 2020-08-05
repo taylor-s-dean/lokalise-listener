@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Braze2Lokalise</title>
+<script src="https://code.jquery.com/jquery-1.12.4.min.js"></script>
+<style>
+pre {
+    outline: 1px solid #ccc;
+    padding: 5px;
+    margin: 5px;
+}
+.string { color: green; }
+.number { color: darkorange; }
+.boolean { color: blue; }
+.null { color: magenta; }
+.key { color: red; }
+</style>
+</head>
+<body>
+    <h1>Braze2Lokalise Translation Uploader</h1>
+    <p>
+        Please enter the API Indentifier (found at the bottom of the template page on Braze) here:
+    </p>
+    <form id="upload" action="/api/v1/braze/parse_template" method="post">
+        <input type="text" name="template_id"/>
+        <input type="submit" value="Submit">
+    </form>
+    <script>
+    $("#upload").submit(function(e) {
+        e.preventDefault();
+        var template_id = $(this).find("input[name='template_id']").val()
+        $.post($(this).attr("action"), {template_id: template_id}).success(function(data) {
+            var obj = $.parseJSON(data)
+            output(syntaxHighlight(JSON.stringify(obj, undefined, 4)));
+        }).fail(function() {
+            alert("Failed to upload strings from template");
+        });
+    });
+
+    function output(inp) {
+        document.body.appendChild(document.createElement('pre')).innerHTML = inp;
+    }
+
+    function syntaxHighlight(json) {
+        json = json.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        return json.replace(/("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g, function (match) {
+            var cls = 'number';
+            if (/^"/.test(match)) {
+                if (/:$/.test(match)) {
+                    cls = 'key';
+                } else {
+                    cls = 'string';
+                }
+            } else if (/true|false/.test(match)) {
+                cls = 'boolean';
+            } else if (/null/.test(match)) {
+                cls = 'null';
+            }
+            return '<span class="' + cls + '">' + match + '</span>';
+        });
+    }
+    </script>
+</body>
+</html>

@@ -24,14 +24,12 @@ func main() {
 	go braze.StartStringsCacheEvictionLoop()
 
 	router := mux.NewRouter()
+	router.PathPrefix("/").Handler(http.StripPrefix("/", utils.Neuter(http.FileServer(http.Dir("./static")))))
 
 	api := router.PathPrefix("/api/v1").Subrouter()
 	api.HandleFunc("/taskComplete", utils.WrapHandler(lokalise.TaskCompletedHandler)).Methods(http.MethodPost)
 	api.HandleFunc("/braze/parse_template", utils.WrapHandler(braze.ParseTemplateHandler)).Methods(http.MethodPost)
 	api.HandleFunc("/strings/braze", utils.WrapHandler(braze.GetStringsHandler)).Methods(http.MethodPost)
-
-	static := router.PathPrefix("/").Subrouter()
-	static.HandleFunc("/braze/template_upload", utils.WrapHandler(braze.TemplateUploadHandler)).Methods(http.MethodGet)
 
 	logging.Info().LogArgs("listening for http/https: {{.address}}", logging.Args{"address": httpAddress})
 	if err := http.ListenAndServeTLS(":https", certificatePath, keyPath, router); err != nil {
