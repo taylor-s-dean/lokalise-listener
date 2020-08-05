@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/limitz404/lokalise-listener/logging"
 	"github.com/limitz404/lokalise-listener/utils"
 )
 
@@ -28,13 +27,13 @@ var (
 func validateLokaliseWebhookSecret(request *http.Request, secret string) error {
 	value := request.Header.Get(lokaliseWebhookSecretHeaderKey)
 	if value != secret {
-		return errors.New("unable to validate request")
+		return utils.WrapError(errors.New("unable to validate request"))
 	}
 
 	return nil
 }
 
-func createStringsPullRequest(projectID string) {
+func createStringsPullRequest(projectID string) error {
 	urlBuilder := strings.Builder{}
 	urlBuilder.WriteString(lokaliseURL)
 	urlBuilder.WriteString(lokaliseProjectsAPI)
@@ -49,8 +48,7 @@ func createStringsPullRequest(projectID string) {
 
 	dataBytes, err := json.Marshal(data)
 	if err != nil {
-		logging.Error().LogErr("unable to marshal JSON body", err)
-		return
+		return utils.WrapError(err)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -64,8 +62,7 @@ func createStringsPullRequest(projectID string) {
 	)
 
 	if err != nil {
-		logging.Error().LogErr("unable to create http request", err)
-		return
+		return utils.WrapError(err)
 	}
 
 	request.Header.Set("content-type", "application/json")
@@ -76,8 +73,12 @@ func createStringsPullRequest(projectID string) {
 	client := &http.Client{}
 	response, err := client.Do(request)
 	if err != nil {
-		logging.Error().LogErr("error reading response", err)
-		return
+		return utils.WrapError(err)
 	}
-	utils.LogResponse(response)
+
+	if err := utils.LogResponse(response); err != nil {
+		return utils.WrapError(err)
+	}
+
+	return nil
 }
