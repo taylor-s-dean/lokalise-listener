@@ -154,7 +154,6 @@ func (cache *stringsCache) Fetch(writer http.ResponseWriter, request *http.Reque
 		writer.Header().Add(utils.ContentTypeHeader, "application/json")
 		return
 	}
-	logging.Debug().LogArgs("cache miss", logging.Args{"key": key})
 
 	// ------------------------------------------------------------------------
 	// Determine the language and populate the template parameters
