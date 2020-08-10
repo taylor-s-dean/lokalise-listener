@@ -15,34 +15,74 @@ import (
 	"github.com/limitz404/lokalise-listener/logging"
 )
 
-// RequestHandler is a function that handles an HTTP request.
-type RequestHandler func(writer http.ResponseWriter, request *http.Request)
+const (
+	// ContentTypeHeader is the string key for the content-type header
+	ContentTypeHeader = "Content-Type"
+)
 
-// Neuter prevents the http.Handler from displaying the directory layout.
-func Neuter(next http.Handler) http.Handler {
-	return http.HandlerFunc(WrapHandler(func(writer http.ResponseWriter, request *http.Request) {
+type loggingResponseWriter struct {
+	status int
+	body   []byte
+	http.ResponseWriter
+}
+
+func (w *loggingResponseWriter) WriteHeader(code int) {
+	w.status = code
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *loggingResponseWriter) Write(body []byte) (int, error) {
+	w.body = body
+	if w.status == 0 {
+		w.WriteHeader(http.StatusOK)
+	}
+
+	return w.ResponseWriter.Write(body)
+}
+
+// NeuterRequest prevents the http.Handler from displaying the directory layout.
+func NeuterRequest(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if len(request.URL.Path) == 0 || strings.HasSuffix(request.URL.Path, "/") {
+			logging.Warn().Log("request was neutered")
 			http.NotFound(writer, request)
 			return
 		}
 
 		next.ServeHTTP(writer, request)
-	}))
+	})
 }
 
-// WrapHandler wraps an HTTP request handler by logging the request then
-// calling the handler.
-func WrapHandler(handler RequestHandler) RequestHandler {
-	return func(writer http.ResponseWriter, request *http.Request) {
+// LogRequest wraps an HTTP handler by logging the request then serving the request.
+func LogRequest(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		start := time.Now()
 		if err := logIncomingRequest(request); err != nil {
 			logging.Error().LogErr("failed to log incoming request", err)
 		}
-		handler(writer, request)
+
+		loggingRW := &loggingResponseWriter{ResponseWriter: writer}
+
+		next.ServeHTTP(loggingRW, request)
+
+		response := &http.Response{
+			StatusCode:    loggingRW.status,
+			Status:        http.StatusText(loggingRW.status),
+			Proto:         "HTTP/1.1",
+			ProtoMajor:    1,
+			ProtoMinor:    1,
+			ContentLength: int64(len(loggingRW.body)),
+			Body:          ioutil.NopCloser(bytes.NewBuffer(loggingRW.body)),
+			Request:       request,
+			Header:        loggingRW.Header().Clone(),
+		}
+
+		LogResponse(response)
+
 		logging.Info().LogArgs("request handled in {{.duration}}", logging.Args{
 			"duration": logging.Duration(time.Now().Sub(start)),
 		})
-	}
+	})
 }
 
 // PrettyJSONString formats and prints a map as JSON.
@@ -56,6 +96,15 @@ func PrettyJSONString(stringJSON map[string]string) string {
 
 // PrettyJSONInterface formats and prints a map as JSON.
 func PrettyJSONInterface(bodyJSON map[string]interface{}) string {
+	bodyBytes, err := prettyJSON(bodyJSON)
+	if err != nil {
+		return ""
+	}
+	return string(bodyBytes)
+}
+
+// PrettyJSON formats and prints an interface{} as JSON.
+func PrettyJSON(bodyJSON interface{}) string {
 	bodyBytes, err := prettyJSON(bodyJSON)
 	if err != nil {
 		return ""
