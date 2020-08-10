@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gorilla/handlers"
 	"github.com/limitz404/lokalise-listener/logging"
 )
 
@@ -19,6 +20,16 @@ const (
 	// ContentTypeHeader is the string key for the content-type header
 	ContentTypeHeader = "Content-Type"
 )
+
+// CombinedLoggingWriter writes trace logs.
+type CombinedLoggingWriter struct {
+	io.Writer
+}
+
+func (CombinedLoggingWriter) Write(p []byte) (n int, err error) {
+	logging.Trace().Log(string(p))
+	return len(p), nil
+}
 
 type loggingResponseWriter struct {
 	status int
@@ -55,7 +66,9 @@ func NeuterRequest(next http.Handler) http.Handler {
 
 // LogRequest wraps an HTTP handler by logging the request then serving the request.
 func LogRequest(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+	combinedLoggingWriter := CombinedLoggingWriter{}
+
+	return handlers.CombinedLoggingHandler(combinedLoggingWriter, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		start := time.Now()
 		if err := logIncomingRequest(request); err != nil {
 			logging.Error().LogErr("failed to log incoming request", err)
@@ -82,7 +95,7 @@ func LogRequest(next http.Handler) http.Handler {
 		logging.Info().LogArgs("request handled in {{.duration}}", logging.Args{
 			"duration": logging.Duration(time.Now().Sub(start)),
 		})
-	})
+	}))
 }
 
 // PrettyJSONString formats and prints a map as JSON.
@@ -155,7 +168,7 @@ func LogResponse(response *http.Response) error {
 	logBuilder.Write(responseDump)
 	logBuilder.WriteRune('\n')
 	logBuilder.Write(bodyDump)
-	logging.Debug().Log(logBuilder.String())
+	logging.Trace().Log(logBuilder.String())
 
 	return nil
 }
@@ -243,7 +256,7 @@ func logRequest(request *http.Request, requestDump []byte) error {
 
 	logBuilder.WriteRune('\n')
 	logBuilder.Write(body)
-	logging.Debug().Log(logBuilder.String())
+	logging.Trace().Log(logBuilder.String())
 
 	return nil
 }
