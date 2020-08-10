@@ -1,9 +1,14 @@
 package main
 
 import (
+	"context"
+	"crypto/tls"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/gorilla/mux"
 	"github.com/limitz404/lokalise-listener/braze"
@@ -54,8 +59,39 @@ func main() {
 
 	router.Walk(printRoutes)
 
-	logging.Info().LogArgs("listening for http/https: {{.address}}", logging.Args{"address": httpAddress})
-	if err := http.ListenAndServeTLS(":https", certificatePath, keyPath, router); err != nil {
-		logging.Fatal().LogErr("failed to start http server", err)
+	srv := &http.Server{
+		Addr:         httpAddress,
+		WriteTimeout: time.Second * 15,
+		ReadTimeout:  time.Second * 15,
+		IdleTimeout:  time.Second * 60,
+		Handler:      router,
+		TLSNextProto: make(map[string]func(*http.Server, *tls.Conn, http.Handler), 0),
+		TLSConfig: &tls.Config{
+			MinVersion:               tls.VersionTLS12,
+			CurvePreferences:         []tls.CurveID{tls.CurveP521, tls.CurveP384, tls.CurveP256},
+			PreferServerCipherSuites: true,
+			CipherSuites: []uint16{
+				tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+				tls.TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA,
+				tls.TLS_RSA_WITH_AES_256_GCM_SHA384,
+				tls.TLS_RSA_WITH_AES_256_CBC_SHA,
+			},
+		},
 	}
+
+	logging.Info().LogArgs("listening for http/https: {{.address}}", logging.Args{"address": httpAddress})
+	go func() {
+		if err := srv.ListenAndServeTLS(certificatePath, keyPath); err != nil {
+			logging.Fatal().LogErr("failed to start http server", err)
+		}
+	}()
+
+	signalChannel := make(chan os.Signal, 1)
+	signal.Notify(signalChannel, os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
+	<-signalChannel
+
+	logging.Info().Log("Caught signal - handling graceful shutdown")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	srv.Shutdown(ctx)
 }
