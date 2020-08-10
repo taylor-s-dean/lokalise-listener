@@ -59,7 +59,7 @@ func NeuterRequest(next http.Handler) http.Handler {
 			http.NotFound(writer, request)
 			return
 		}
-
+		writer.Header().Add("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
 		next.ServeHTTP(writer, request)
 	})
 }
