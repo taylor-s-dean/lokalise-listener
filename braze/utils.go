@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/url"
 	"os"
@@ -38,8 +37,8 @@ type stringsCache struct {
 }
 
 type stringsCacheValue struct {
-	evictionTime time.Time
-	data         []byte
+	EvictionTime time.Time
+	Data         []byte
 }
 
 type stringsStore struct {
@@ -56,21 +55,21 @@ func (cache *stringsStore) Get(key string) (map[string]string, bool) {
 }
 
 func newStringsCacheValue(data []byte) *stringsCacheValue {
-	newValue := stringsCacheValue{data: data}
+	newValue := stringsCacheValue{Data: data}
 	newValue.Touch()
 	return &newValue
 }
 
 func (value *stringsCacheValue) Touch() {
-	value.evictionTime = time.Now().Add(5 * time.Second)
+	value.EvictionTime = time.Now().Add(5 * time.Second)
 }
 
 func (value stringsCacheValue) GetData() []byte {
-	return value.data
+	return value.Data
 }
 
 func (value stringsCacheValue) IsExpired() bool {
-	return time.Now().After(value.evictionTime)
+	return time.Now().After(value.EvictionTime)
 }
 
 func (cache *stringsCache) getKey(data map[string]string) (string, error) {
@@ -85,7 +84,7 @@ func (cache *stringsCache) getKey(data map[string]string) (string, error) {
 func (cache *stringsCache) Evict() {
 	cache.Range(func(key, value interface{}) bool {
 		if value.(*stringsCacheValue).IsExpired() {
-			logging.Info().LogArgs("evicting {{.key}}", logging.Args{"key": key.(string)})
+			logging.Debug().Log("evicting\nkey: " + key.(string) + "\nvalue:\n" + utils.PrettyJSON(value))
 			cache.Delete(key)
 		}
 		return true
@@ -152,7 +151,7 @@ func (cache *stringsCache) Fetch(writer http.ResponseWriter, request *http.Reque
 		cache.Store(key, value)
 		writer.Write(value.GetData())
 		writer.Header().Add("X-From-Cache", "1")
-		logging.Debug().LogArgs("cache hit", logging.Args{"key": key})
+		writer.Header().Add(utils.ContentTypeHeader, "application/json")
 		return
 	}
 	logging.Debug().LogArgs("cache miss", logging.Args{"key": key})
@@ -200,9 +199,10 @@ func (cache *stringsCache) Fetch(writer http.ResponseWriter, request *http.Reque
 	cache.Store(key, newStringsCacheValue(dataBytes))
 	value, ok = cache.Get(key)
 	if ok {
-		logging.Debug().LogArgs("eviction time", logging.Args{"evictionTime": value.evictionTime.String()})
+		logging.Debug().LogArgs("eviction time", logging.Args{"evictionTime": value.EvictionTime.String()})
 	}
 	writer.Write(dataBytes)
+	writer.Header().Add(utils.ContentTypeHeader, "application/json")
 }
 
 func extractBrazeStrings(template string) (map[string]string, error) {
@@ -211,7 +211,6 @@ func extractBrazeStrings(template string) (map[string]string, error) {
 		return map[string]string{}, nil
 	}
 
-	logging.Debug().Log(fmt.Sprint(matches))
 	// Braze strings are parsed into a [][]string.
 	// Each match is parsed into []string of size 3. The data at
 	// each index is as follows:
@@ -231,7 +230,6 @@ func extractBrazeStrings(template string) (map[string]string, error) {
 		stringMap[match[1]] = defaultString
 	}
 
-	logging.Debug().Log("\n" + utils.PrettyJSONString(stringMap))
 	return stringMap, nil
 }
 
@@ -285,10 +283,6 @@ func getBrazeTemplateInfo(templateID string) (map[string]string, error) {
 	}
 
 	brazeStringStore.Store(templateID, extractedStrings)
-	brazeStringStore.Range(func(key, value interface{}) bool {
-		logging.Debug().Log(key.(string) + ": \n" + utils.PrettyJSONString(value.(map[string]string)))
-		return true
-	})
 	value, ok := brazeStringStore.Get(templateID)
 	if ok {
 		logging.Debug().Log(utils.PrettyJSONString(value))
