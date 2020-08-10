@@ -41,5 +41,5 @@ sudo apt install certbot
 
 Generate certificates:
 ```sh
-sudo certbot certonly --standalone -d <list of domains> --agree-tos --non-interactive -m <email>
+sudo certbot certonly --standalone -d <list of domains> --agree-tos --non-interactive -m <email> --rsa-key-size 4096
 ```
