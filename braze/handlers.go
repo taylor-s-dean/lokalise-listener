@@ -26,10 +26,7 @@ func ParseTemplateHandler(writer http.ResponseWriter, request *http.Request) {
 
 	data := map[string]interface{}{
 		"template_id": templateID,
-	}
-
-	for key, value := range templateStrings {
-		data[key] = value
+		"strings":     templateStrings,
 	}
 
 	dataBytes, err := json.Marshal(data)

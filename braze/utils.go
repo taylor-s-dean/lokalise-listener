@@ -21,7 +21,7 @@ import (
 const (
 	brazeURL             = "https://rest.iad-01.braze.com"
 	brazeTemplateInfoAPI = "/templates/email/info"
-	brazeStringRegexpStr = `{{[ \t]*strings\.(?P<key>.+?)[ \t]*\|[ \t]*default:[ \t]*(?:'|\")(?P<default>.+?)(?:'|\")[ \t]*}}`
+	brazeStringRegexpStr = `{{[ \t]*strings\.(?P<key>.+?)[ \t]*\|[ \t]*default:[ \t]*(?:'|\")(?P<default>.+?)(?:'|\")[ \t]*}}([ \t]*<!--[ \t]*context:[ \t]*"(?P<context>.+?)"[ \t]*-->)?`
 )
 
 var (
@@ -45,10 +45,10 @@ type stringsStore struct {
 	sync.Map
 }
 
-func (cache *stringsStore) Get(key string) (map[string]string, bool) {
+func (cache *stringsStore) Get(key string) (map[string]brazeString, bool) {
 	value, ok := cache.Load(key)
 	if ok {
-		return value.(map[string]string), ok
+		return value.(map[string]brazeString), ok
 	}
 
 	return nil, ok
@@ -84,7 +84,7 @@ func (cache *stringsCache) getKey(data map[string]string) (string, error) {
 func (cache *stringsCache) Evict() {
 	cache.Range(func(key, value interface{}) bool {
 		if value.(*stringsCacheValue).IsExpired() {
-			logging.Debug().Log("evicting\nkey: " + key.(string) + "\nvalue:\n" + utils.PrettyJSON(value))
+			logging.Trace().Log("evicting\nkey: " + key.(string) + "\nvalue:\n" + utils.PrettyJSON(value))
 			cache.Delete(key)
 		}
 		return true
@@ -125,7 +125,21 @@ func (cache *stringsCache) Fetch(writer http.ResponseWriter, request *http.Reque
 		return
 	}
 
-	formData, err := utils.FlattenPostForm(request.PostForm)
+	var queryParams url.Values
+
+	switch request.Method {
+	case http.MethodGet:
+		var err error
+		queryParams, err = url.ParseQuery(request.URL.RawQuery)
+		if err != nil {
+			http.Error(writer, "failed to parse query parameters", http.StatusInternalServerError)
+			return
+		}
+	case http.MethodPost:
+		queryParams = request.PostForm
+	}
+
+	formData, err := utils.FlattenPostForm(queryParams)
 	if err != nil {
 		http.Error(writer, "failed to flatten form data", http.StatusInternalServerError)
 		return
@@ -160,9 +174,13 @@ func (cache *stringsCache) Fetch(writer http.ResponseWriter, request *http.Reque
 	// ------------------------------------------------------------------------
 	testTemplate := testTemplateEs
 	testParagraph := "La dirección de correo electrónico que utiliza para iniciar sesión en OkCupid acaba de cambiar. Si no realizó este cambio, infórmenos de inmediato."
+	testSignIn := "Iniciar Sesión"
+	testUnsubscribe := "Cancelar Suscripción"
 	if formData["locale"] == "en" {
 		testTemplate = testTemplateEn
 		testParagraph = "The email address you use to sign in to OkCupid was just changed. If you didn’t make this change, please let us know immediately."
+		testSignIn = "Sign In"
+		testUnsubscribe = "Unsubscribe"
 	}
 
 	t, err := template.New("").Parse(testTemplate)
@@ -179,8 +197,10 @@ func (cache *stringsCache) Fetch(writer http.ResponseWriter, request *http.Reque
 	// Generate the response JSON
 	// ------------------------------------------------------------------------
 	data := map[string]interface{}{
-		"header":    buf.String(),
-		"paragraph": testParagraph,
+		"header":      buf.String(),
+		"paragraph":   testParagraph,
+		"sign_in":     testSignIn,
+		"unsubscribe": testUnsubscribe,
 	}
 
 	dataBytes, err := json.Marshal(data)
@@ -189,25 +209,24 @@ func (cache *stringsCache) Fetch(writer http.ResponseWriter, request *http.Reque
 		return
 	}
 
-	logging.Debug().Log("\n" + utils.PrettyJSONInterface(data))
-
 	// ------------------------------------------------------------------------
 	// Write the response
 	// ------------------------------------------------------------------------
 
 	cache.Store(key, newStringsCacheValue(dataBytes))
-	value, ok = cache.Get(key)
-	if ok {
-		logging.Debug().LogArgs("eviction time", logging.Args{"evictionTime": value.EvictionTime.String()})
-	}
 	writer.Write(dataBytes)
 	writer.Header().Add(utils.ContentTypeHeader, "application/json")
 }
 
-func extractBrazeStrings(template string) (map[string]string, error) {
+type brazeString struct {
+	Default string `json:"default"`
+	Context string `json:"context"`
+}
+
+func extractBrazeStrings(template string) (map[string]brazeString, error) {
 	matches := brazeStringRegexp.FindAllStringSubmatch(template, -1)
 	if len(matches) == 0 {
-		return map[string]string{}, nil
+		return map[string]brazeString{}, nil
 	}
 
 	// Braze strings are parsed into a [][]string.
@@ -216,23 +235,27 @@ func extractBrazeStrings(template string) (map[string]string, error) {
 	// 1) Full match
 	// 2) String Key
 	// 3) String Value
+	// 4) Context
 
-	stringMap := make(map[string]string, len(matches))
+	stringMap := make(map[string]brazeString, len(matches))
 	for _, match := range matches {
-		if len(match) != 3 {
+		if len(match) != 5 {
 			return nil, utils.WrapError(errors.New("failed to parse strings"))
 		}
 
 		defaultString := match[2]
 		defaultString = strings.ReplaceAll(defaultString, "[[", "{{")
 		defaultString = strings.ReplaceAll(defaultString, "]]", "}}")
-		stringMap[match[1]] = defaultString
+		stringMap[match[1]] = brazeString{
+			Default: defaultString,
+			Context: match[4],
+		}
 	}
 
 	return stringMap, nil
 }
 
-func getBrazeTemplateInfo(templateID string) (map[string]string, error) {
+func getBrazeTemplateInfo(templateID string) (map[string]brazeString, error) {
 	if len(templateID) == 0 {
 		return nil, utils.WrapError(errors.New("received empty templateID"))
 	}
@@ -268,7 +291,6 @@ func getBrazeTemplateInfo(templateID string) (map[string]string, error) {
 	if err != nil {
 		return nil, utils.WrapError(err)
 	}
-	// utils.LogResponse(response)
 
 	bodyJSON, err := utils.GetJSONBody(&response.Body)
 	if err != nil {
@@ -282,10 +304,6 @@ func getBrazeTemplateInfo(templateID string) (map[string]string, error) {
 	}
 
 	brazeStringStore.Store(templateID, extractedStrings)
-	value, ok := brazeStringStore.Get(templateID)
-	if ok {
-		logging.Debug().Log(utils.PrettyJSONString(value))
-	}
 
 	return extractedStrings, nil
 }
