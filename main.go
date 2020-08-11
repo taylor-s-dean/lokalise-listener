@@ -54,8 +54,9 @@ func main() {
 
 	api := router.PathPrefix("/api/v1").Subrouter()
 	api.HandleFunc("/taskComplete", lokalise.TaskCompletedHandler).Methods(http.MethodPost)
+	api.Handle("/lokalise/order_complete", utils.ValidateAPIKey(http.HandlerFunc(lokalise.TaskCompletedHandler))).Methods(http.MethodPost)
 	api.HandleFunc("/braze/parse_template", braze.ParseTemplateHandler).Methods(http.MethodPost)
-	api.HandleFunc("/strings/braze", braze.GetStringsHandler).Methods(http.MethodPost)
+	api.Handle("/strings/braze", utils.ValidateAPIKey(http.HandlerFunc(braze.GetStringsHandler))).Methods(http.MethodGet, http.MethodPost)
 
 	router.Walk(printRoutes)
 

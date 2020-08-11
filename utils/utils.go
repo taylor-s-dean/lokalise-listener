@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -19,6 +20,10 @@ import (
 const (
 	// ContentTypeHeader is the string key for the content-type header
 	ContentTypeHeader = "Content-Type"
+)
+
+var (
+	authenticationSecret = os.Getenv("API_AUTHENTICATION_SECRET")
 )
 
 // CombinedLoggingWriter writes trace logs.
@@ -60,6 +65,18 @@ func NeuterRequest(next http.Handler) http.Handler {
 			return
 		}
 		writer.Header().Add("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
+		next.ServeHTTP(writer, request)
+	})
+}
+
+// ValidateAPIKey returns a 404 if the API key cannot be validated.
+func ValidateAPIKey(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Header.Get("X-Secret-Token") != authenticationSecret {
+			logging.Warn().Log("request secret failed validation")
+			http.NotFound(writer, request)
+			return
+		}
 		next.ServeHTTP(writer, request)
 	})
 }
