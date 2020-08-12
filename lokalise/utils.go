@@ -68,7 +68,9 @@ func createStringsPullRequest(projectID string) error {
 	request.Header.Set("content-type", "application/json")
 	request.Header.Set("x-api-token", readOnlyAPIToken)
 
-	utils.LogOutgoingRequest(request)
+	if utils.VerboseLogging {
+		utils.LogOutgoingRequest(request)
+	}
 
 	client := &http.Client{}
 	response, err := client.Do(request)
@@ -76,8 +78,10 @@ func createStringsPullRequest(projectID string) error {
 		return utils.WrapError(err)
 	}
 
-	if err := utils.LogResponse(response); err != nil {
-		return utils.WrapError(err)
+	if utils.VerboseLogging {
+		if err := utils.LogResponse(response); err != nil {
+			return utils.WrapError(err)
+		}
 	}
 
 	return nil
