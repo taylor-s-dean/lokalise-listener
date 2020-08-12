@@ -21,6 +21,7 @@ func ParseTemplateHandler(writer http.ResponseWriter, request *http.Request) {
 	templateStrings, err := getBrazeTemplateInfo(templateID)
 	if err != nil {
 		http.Error(writer, "unable to parse template", http.StatusInternalServerError)
+		logging.Error().LogErr("faile to parse template", err)
 		return
 	}
 
@@ -32,6 +33,7 @@ func ParseTemplateHandler(writer http.ResponseWriter, request *http.Request) {
 	dataBytes, err := json.Marshal(data)
 	if err != nil {
 		writer.WriteHeader(http.StatusInternalServerError)
+		logging.Error().LogErr("faile to marshal JSON", err)
 		return
 	}
 

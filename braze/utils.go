@@ -84,7 +84,6 @@ func (cache *stringsCache) getKey(data map[string]string) (string, error) {
 func (cache *stringsCache) Evict() {
 	cache.Range(func(key, value interface{}) bool {
 		if value.(*stringsCacheValue).IsExpired() {
-			logging.Trace().Log("evicting\nkey: " + key.(string) + "\nvalue:\n" + utils.PrettyJSON(value))
 			cache.Delete(key)
 		}
 		return true
@@ -284,7 +283,9 @@ func getBrazeTemplateInfo(templateID string) (map[string]brazeString, error) {
 
 	request.Header.Add("Authorization", "Bearer "+brazeTemplateAPIKey)
 
-	utils.LogOutgoingRequest(request)
+	if utils.VerboseLogging {
+		utils.LogOutgoingRequest(request)
+	}
 
 	client := &http.Client{}
 	response, err := client.Do(request)
@@ -296,9 +297,19 @@ func getBrazeTemplateInfo(templateID string) (map[string]brazeString, error) {
 	if err != nil {
 		return nil, utils.WrapError(err)
 	}
-	templateBody := bodyJSON["body"].(string)
 
-	extractedStrings, err := extractBrazeStrings(templateBody)
+	templateBody, ok := bodyJSON["body"]
+	if !ok {
+		logging.Debug().Log(utils.PrettyJSON(bodyJSON))
+		message, ok := bodyJSON["message"]
+		if !ok {
+			message = "could not retrieve Braze template body"
+		}
+
+		return nil, utils.WrapError(errors.New(message.(string)))
+	}
+
+	extractedStrings, err := extractBrazeStrings(templateBody.(string))
 	if err != nil {
 		return nil, utils.WrapError(err)
 	}

@@ -2,16 +2,21 @@ package utils
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"io"
 	"io/ioutil"
+	"math/rand"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
+
+	crand "crypto/rand"
 
 	"github.com/gorilla/handlers"
 	"github.com/limitz404/lokalise-listener/logging"
@@ -20,19 +25,41 @@ import (
 const (
 	// ContentTypeHeader is the string key for the content-type header
 	ContentTypeHeader = "Content-Type"
+
+	// UniqueRequestIDHeaderKey is used to track a request in the logs
+	UniqueRequestIDHeaderKey = "X-Unique-Request-Id"
 )
 
 var (
 	authenticationSecret = os.Getenv("API_AUTHENTICATION_SECRET")
+
+	// VerboseLogging is a flag that enables and disables verbose logs.
+	VerboseLogging = false
 )
+
+func init() {
+	b := make([]byte, 8)
+	_, err := crand.Read(b)
+	if err != nil {
+		panic("Failed to read bytes for seeding rand.")
+	}
+	rand.Seed(int64(binary.LittleEndian.Uint64(b)))
+}
 
 // CombinedLoggingWriter writes trace logs.
 type CombinedLoggingWriter struct {
+	uniqueID  string
+	startTime time.Time
 	io.Writer
 }
 
-func (CombinedLoggingWriter) Write(p []byte) (n int, err error) {
-	logging.Trace().Log(string(p))
+func (w CombinedLoggingWriter) Write(p []byte) (n int, err error) {
+	logBuilder := strings.Builder{}
+	logBuilder.Write(p[:len(p)-1])
+	logBuilder.WriteRune(' ')
+	logBuilder.WriteString(time.Now().Sub(w.startTime).String())
+	logging.Trace().Log(logBuilder.String())
+
 	return len(p), nil
 }
 
@@ -81,70 +108,57 @@ func ValidateAPIKey(next http.Handler) http.Handler {
 	})
 }
 
+// AddUniqueRequestID adds a header containing a unique request identifier number.
+func AddUniqueRequestID(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		uniqueID := strconv.FormatUint(rand.Uint64(), 36)
+		request.Header.Add(UniqueRequestIDHeaderKey, uniqueID)
+		writer.Header().Add(UniqueRequestIDHeaderKey, uniqueID)
+		next.ServeHTTP(writer, request)
+	})
+}
+
 // LogRequest wraps an HTTP handler by logging the request then serving the request.
 func LogRequest(next http.Handler) http.Handler {
-	combinedLoggingWriter := CombinedLoggingWriter{}
-
-	return handlers.CombinedLoggingHandler(combinedLoggingWriter, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		start := time.Now()
-		if err := logIncomingRequest(request); err != nil {
-			logging.Error().LogErr("failed to log incoming request", err)
+	combinedLoggingWriter := CombinedLoggingWriter{startTime: time.Now()}
+	return handlers.CombinedLoggingHandler(&combinedLoggingWriter, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		combinedLoggingWriter.uniqueID = request.Header.Get(UniqueRequestIDHeaderKey)
+		if VerboseLogging {
+			if err := logIncomingRequest(request); err != nil {
+				logging.Error().LogErr("failed to log incoming request", err)
+			}
 		}
 
 		loggingRW := &loggingResponseWriter{ResponseWriter: writer}
 
 		next.ServeHTTP(loggingRW, request)
 
-		response := &http.Response{
-			StatusCode:    loggingRW.status,
-			Status:        http.StatusText(loggingRW.status),
-			Proto:         "HTTP/1.1",
-			ProtoMajor:    1,
-			ProtoMinor:    1,
-			ContentLength: int64(len(loggingRW.body)),
-			Body:          ioutil.NopCloser(bytes.NewBuffer(loggingRW.body)),
-			Request:       request,
-			Header:        loggingRW.Header().Clone(),
+		if VerboseLogging {
+			response := &http.Response{
+				StatusCode:    loggingRW.status,
+				Status:        http.StatusText(loggingRW.status),
+				Proto:         "HTTP/1.1",
+				ProtoMajor:    1,
+				ProtoMinor:    1,
+				ContentLength: int64(len(loggingRW.body)),
+				Body:          ioutil.NopCloser(bytes.NewBuffer(loggingRW.body)),
+				Request:       request,
+				Header:        loggingRW.Header().Clone(),
+			}
+
+			LogResponse(response)
 		}
-
-		LogResponse(response)
-
-		logging.Info().LogArgs("request handled in {{.duration}}", logging.Args{
-			"duration": logging.Duration(time.Now().Sub(start)),
-		})
 	}))
-}
-
-// PrettyJSONString formats and prints a map as JSON.
-func PrettyJSONString(stringJSON map[string]string) string {
-	stringBytes, err := prettyJSON(stringJSON)
-	if err != nil {
-		return ""
-	}
-	return string(stringBytes)
-}
-
-// PrettyJSONInterface formats and prints a map as JSON.
-func PrettyJSONInterface(bodyJSON map[string]interface{}) string {
-	bodyBytes, err := prettyJSON(bodyJSON)
-	if err != nil {
-		return ""
-	}
-	return string(bodyBytes)
 }
 
 // PrettyJSON formats and prints an interface{} as JSON.
 func PrettyJSON(bodyJSON interface{}) string {
-	bodyBytes, err := prettyJSON(bodyJSON)
+	bodyBytes, err := json.MarshalIndent(bodyJSON, "", "    ")
 	if err != nil {
+		logging.Error().LogErr("failed to marshal JSON", err)
 		return ""
 	}
 	return string(bodyBytes)
-}
-
-func prettyJSON(bodyJSON interface{}) ([]byte, error) {
-	bodyBytes, err := json.MarshalIndent(bodyJSON, "", "    ")
-	return bodyBytes, WrapError(err)
 }
 
 // LogResponse formats an HTTP reponse and prints it.
@@ -168,23 +182,24 @@ func LogResponse(response *http.Response) error {
 	}
 	response.Body = ioutil.NopCloser(bytes.NewBuffer(bodyDump))
 
+	var bodyStr string
+
 	if len(bodyDump) > 0 && strings.Contains(response.Header.Get("Content-Type"), "application/json") {
 		bodyObj := map[string]interface{}{}
 		if err := json.Unmarshal(bodyDump, &bodyObj); err != nil {
 			return WrapError(err)
 		}
 
-		bodyDump, err = prettyJSON(bodyObj)
-		if err != nil {
-			return WrapError(err)
-		}
+		bodyStr = PrettyJSON(bodyObj)
 	}
 
 	logBuilder := strings.Builder{}
 	logBuilder.WriteRune('\n')
 	logBuilder.Write(responseDump)
-	logBuilder.WriteRune('\n')
-	logBuilder.Write(bodyDump)
+	if len(bodyStr) > 0 {
+		logBuilder.WriteRune('\n')
+		logBuilder.WriteString(bodyStr)
+	}
 	logging.Trace().Log(logBuilder.String())
 
 	return nil

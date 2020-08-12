@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"flag"
 	"net/http"
 	"os"
 	"os/signal"
@@ -32,21 +33,26 @@ func printRoutes(route *mux.Route, router *mux.Router, ancestors []*mux.Route) e
 	queriesTemplates, _ := route.GetQueriesTemplates()
 	queriesRegexps, _ := route.GetQueriesRegexp()
 	methods, _ := route.GetMethods()
-	logging.Trace().Log("\n" +
-		utils.PrettyJSON(logging.Args{
+	logging.Info().LogArgs("",
+		logging.Args{
 			"route":           pathTemplate,
 			"path_regexp":     pathRegexp,
 			"query_templates": strings.Join(queriesTemplates, ","),
 			"query_regexps":   strings.Join(queriesRegexps, ","),
 			"methods":         strings.Join(methods, ","),
-		}))
+		})
 	return nil
 }
 
 func main() {
+	verboseLogging := flag.Bool("verbose", false, "enable verbose logging")
+	flag.Parse()
+	utils.VerboseLogging = *verboseLogging
+
 	go braze.StartStringsCacheEvictionLoop()
 
 	router := mux.NewRouter()
+	router.Use(utils.AddUniqueRequestID)
 	router.Use(utils.LogRequest)
 	router.Use(utils.NeuterRequest)
 	static := router.PathPrefix("/static")
@@ -88,8 +94,19 @@ func main() {
 	}()
 
 	signalChannel := make(chan os.Signal, 1)
-	signal.Notify(signalChannel, os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
-	<-signalChannel
+	signal.Notify(signalChannel, os.Interrupt, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+	for {
+		sig := <-signalChannel
+		if sig == syscall.SIGHUP {
+			utils.VerboseLogging = !utils.VerboseLogging
+			logging.Info().LogArgs("verbose logging set to {{.value}}",
+				logging.Args{
+					"value": logging.Bool(utils.VerboseLogging),
+				})
+		} else {
+			break
+		}
+	}
 
 	logging.Info().Log("Caught signal - handling graceful shutdown")
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
