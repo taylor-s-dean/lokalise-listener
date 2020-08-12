@@ -57,6 +57,8 @@ func (w CombinedLoggingWriter) Write(p []byte) (n int, err error) {
 	logBuilder := strings.Builder{}
 	logBuilder.Write(p[:len(p)-1])
 	logBuilder.WriteRune(' ')
+	logBuilder.WriteString(w.uniqueID)
+	logBuilder.WriteRune(' ')
 	logBuilder.WriteString(time.Now().Sub(w.startTime).String())
 	logging.Trace().Log(logBuilder.String())
 
