@@ -13,6 +13,7 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/limitz404/lokalise-listener/braze"
+	"github.com/limitz404/lokalise-listener/github"
 	"github.com/limitz404/lokalise-listener/logging"
 	"github.com/limitz404/lokalise-listener/lokalise"
 	"github.com/limitz404/lokalise-listener/utils"
@@ -33,6 +34,7 @@ func printRoutes(route *mux.Route, router *mux.Router, ancestors []*mux.Route) e
 	queriesTemplates, _ := route.GetQueriesTemplates()
 	queriesRegexps, _ := route.GetQueriesRegexp()
 	methods, _ := route.GetMethods()
+	host, _ := route.GetHostTemplate()
 	logging.Info().LogArgs("",
 		logging.Args{
 			"route":           pathTemplate,
@@ -40,6 +42,7 @@ func printRoutes(route *mux.Route, router *mux.Router, ancestors []*mux.Route) e
 			"query_templates": strings.Join(queriesTemplates, ","),
 			"query_regexps":   strings.Join(queriesRegexps, ","),
 			"methods":         strings.Join(methods, ","),
+			"host":            host,
 		})
 	return nil
 }
@@ -54,15 +57,23 @@ func main() {
 	router := mux.NewRouter()
 	router.Use(utils.AddUniqueRequestID)
 	router.Use(utils.LogRequest)
-	router.Use(utils.NeuterRequest)
-	static := router.PathPrefix("/static")
-	static.Handler(http.StripPrefix("/static", http.FileServer(http.Dir("./static")))).Methods(http.MethodGet)
+	static := router.PathPrefix("/static").Host("www.makeshift.dev")
+	staticServer := http.FileServer(utils.NeuteredFileSystem{FS: http.Dir("./static")})
+	static.Handler(http.StripPrefix("/static", staticServer)).Methods(http.MethodGet)
 
-	api := router.PathPrefix("/api/v1").Subrouter()
-	api.HandleFunc("/taskComplete", lokalise.TaskCompletedHandler).Methods(http.MethodPost)
-	api.Handle("/lokalise/order_complete", utils.ValidateAPIKey(http.HandlerFunc(lokalise.TaskCompletedHandler))).Methods(http.MethodPost)
-	api.HandleFunc("/braze/parse_template", braze.ParseTemplateHandler).Methods(http.MethodPost)
-	api.Handle("/strings/braze", utils.ValidateAPIKey(http.HandlerFunc(braze.GetStringsHandler))).Methods(http.MethodGet, http.MethodPost)
+	lokaliseAPI := router.PathPrefix("/api/v1/lokalise").Host("www.makeshift.dev").Subrouter()
+	lokaliseAPI.Handle("/order_complete", utils.ValidateAPIKey(http.HandlerFunc(lokalise.TaskCompletedHandler))).Methods(http.MethodPost)
+
+	brazeAPI := router.PathPrefix("/api/v1/braze").Host("www.makeshift.dev").Subrouter()
+	brazeAPI.HandleFunc("/parse_template", braze.ParseTemplateHandler).Methods(http.MethodPost)
+	brazeAPI.Handle("/strings", utils.ValidateAPIKey(http.HandlerFunc(braze.GetStringsHandler))).Methods(http.MethodGet, http.MethodPost)
+
+	githubAPI := router.PathPrefix("/api/v1/github").Host("www.makeshift.dev").Subrouter()
+	githubAPI.HandleFunc("/ping", github.PingHandler).Methods(http.MethodPost)
+
+	facepalmServer := http.FileServer(utils.NeuteredFileSystem{FS: http.Dir("./facepalm")})
+	router.Host("www.facepalm.wtf").Handler(facepalmServer).Methods(http.MethodGet)
+	router.Host("facepalm.wtf").Handler(facepalmServer).Methods(http.MethodGet)
 
 	router.Walk(printRoutes)
 

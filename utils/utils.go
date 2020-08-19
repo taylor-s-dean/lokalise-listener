@@ -12,6 +12,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -44,6 +45,36 @@ func init() {
 		panic("Failed to read bytes for seeding rand.")
 	}
 	rand.Seed(int64(binary.LittleEndian.Uint64(b)))
+}
+
+// NeuteredFileSystem prevents directory listings.
+type NeuteredFileSystem struct {
+	FS http.FileSystem
+}
+
+// Open attempts to open a file. If no file is specified, it defaults to index.html.
+// Returns an error if file doesn't exist.
+func (nfs NeuteredFileSystem) Open(path string) (http.File, error) {
+	f, err := nfs.FS.Open(path)
+	if err != nil {
+		return nil, err
+	}
+
+	s, err := f.Stat()
+	if s.IsDir() {
+		logging.Warn().Log("request was neutered")
+		index := filepath.Join(path, "index.html")
+		if _, err := nfs.FS.Open(index); err != nil {
+			closeErr := f.Close()
+			if closeErr != nil {
+				return nil, closeErr
+			}
+
+			return nil, err
+		}
+	}
+
+	return f, nil
 }
 
 // CombinedLoggingWriter writes trace logs.
@@ -88,8 +119,8 @@ func (w *loggingResponseWriter) Write(body []byte) (int, error) {
 // NeuterRequest prevents the http.Handler from displaying the directory layout.
 func NeuterRequest(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if len(request.URL.Path) == 0 || strings.HasSuffix(request.URL.Path, "/") {
-			logging.Warn().Log("request was neutered")
+		if strings.HasSuffix(request.URL.Path, "/") {
+			logging.Warn().LogArgs("request was neutered", logging.Args{"request_id": request.Header.Get(UniqueRequestIDHeaderKey)})
 			http.NotFound(writer, request)
 			return
 		}
